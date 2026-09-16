@@ -57,6 +57,17 @@ except presentation logic.
 
 ## 3. Installation (Windows / PowerShell)
 
+### One click
+
+```bat
+install.bat      :: creates the virtualenv, installs Python + Node packages,
+                 :: and builds the dashboard - nothing else to do
+```
+
+Needs only Python 3 and Node.js on `PATH`. When it finishes, start the app with `start.bat`.
+
+### Manual
+
 ```powershell
 # --- backend ---
 cd c:\xampp\htdocs\shopify
@@ -67,6 +78,7 @@ pip install -r backend\requirements.txt
 # --- frontend ---
 cd frontend
 npm install
+npm run build
 ```
 
 Optional configuration:
@@ -89,7 +101,6 @@ start.bat dev    :: dev mode (Turbopack) for when you are editing the frontend
 Starts FastAPI on <http://127.0.0.1:8080> and the dashboard on <http://localhost:3000>.
 The batch file builds the frontend on first run (one-time), checks the virtualenv, and keeps
 the backend in a separate minimised window.
-
 PowerShell alternative:
 
 ```powershell
@@ -425,6 +436,7 @@ shopify/
 ├── main.py                     original service (kept as the source of truth)
 ├── cards.txt                   cards used when a request omits one
 ├── .env.example                configuration template
+├── install.bat                 one-click installer (venv + packages + build)
 ├── start.bat                   one-click launcher (backend + dashboard)
 ├── dev.ps1                     PowerShell launcher (same, with -Dev switch)
 ├── backend/

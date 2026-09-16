@@ -63,10 +63,8 @@ goto :skip_build
 echo [ERROR] Virtual environment not found:
 echo         %PYTHON%
 echo.
-echo Create it once with:
-echo     python -m venv .venv
-echo     .\.venv\Scripts\activate.bat
-echo     pip install -r backend\requirements.txt
+echo Run install.bat once - it installs the Python packages,
+echo Node dependencies and the dashboard build for you.
 pause
 exit /b 1
 
