@@ -19,9 +19,13 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 BACKEND_DIR = PROJECT_ROOT / "backend"
-# Serverless hosts (Vercel, AWS Lambda) only allow writes to /tmp, so the data
-# directory is env-overridable and creation is best-effort.
-DATA_DIR = Path(os.environ.get("DATA_DIR", str(BACKEND_DIR / "data")))
+# Serverless hosts (Vercel, AWS Lambda) only allow writes to /tmp. Vercel
+# always sets VERCEL=1, so runtime data lands in /tmp there automatically.
+ON_VERCEL = os.environ.get("VERCEL") == "1"
+if ON_VERCEL:
+    DATA_DIR = Path("/tmp/data")
+else:
+    DATA_DIR = Path(os.environ.get("DATA_DIR", str(BACKEND_DIR / "data")))
 try:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
 except OSError:
@@ -47,7 +51,7 @@ class Settings(BaseSettings):
     cors_origins: str = "*"
 
     # --- engine -----------------------------------------------------------
-    cards_file: str = str(PROJECT_ROOT / "cards.txt")
+    cards_file: str = str(Path("/tmp/cards.txt") if ON_VERCEL else PROJECT_ROOT / "cards.txt")
     max_price: float = 500.0
     site_concurrency: int = 15
     pool_size: int = 500
@@ -83,6 +87,15 @@ class Settings(BaseSettings):
     @classmethod
     def _norm_level(cls, v: str) -> str:
         return (v or "info").lower()
+
+    @field_validator("cards_file")
+    @classmethod
+    def _vercel_cards_path(cls, v: str) -> str:
+        # Vercel's auto-detected env may set CARDS_FILE=cards.txt, but the
+        # function filesystem is read-only outside /tmp.
+        if ON_VERCEL:
+            return str(Path("/tmp") / "cards.txt")
+        return v
 
     @property
     def cors_list(self) -> list[str]:
