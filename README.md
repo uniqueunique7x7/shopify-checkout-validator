@@ -412,39 +412,41 @@ npm run build
 
 ## 9. Deploying to Vercel
 
-The frontend is a perfect Vercel fit; the backend runs there too, but see the
-serverless caveats below — for long batch jobs a long-running host (Render,
-Railway, a VPS) is the better home for the API.
+Deployed as **one project with two services** (Vercel Services): the Next.js
+frontend and the FastAPI backend share the production domain
+<https://shopify-checkout-validator.vercel.app> — the dashboard at `/`, the API
+under `/api/*` and `/docs`.
 
-### Backend project
+The root `vercel.json` defines both services and the routing:
 
-Import this repo in Vercel and set:
-
-* **Root Directory**: `backend`
-* **Framework Preset**: FastAPI (it runs `pip install -r requirements.txt` at build)
-* `backend/vercel.json` rewrites every route to the serverless handler `backend/api/index.py`
-
-Environment variables (Vercel filesystem is read-only except `/tmp`):
-
+```json
+{
+  "services": {
+    "frontend": { "root": "frontend", "framework": "nextjs" },
+    "backend":  { "root": "backend", "entrypoint": "app.main:app" }
+  },
+  "rewrites": [
+    { "source": "/api/(.*)", "destination": { "service": "backend" } },
+    { "source": "/docs", "destination": { "service": "backend" } },
+    { "source": "/redoc", "destination": { "service": "backend" } },
+    { "source": "/openapi.json", "destination": { "service": "backend" } },
+    { "source": "/(.*)", "destination": { "service": "frontend" } }
+  ]
+}
 ```
-DATA_DIR=/tmp/data
-CARDS_FILE=/tmp/cards.txt
-```
 
-`history_file`, `settings.json` and the request log automatically follow
-`DATA_DIR`. Function `maxDuration` is set to 60 (the Hobby maximum) — enough for
-one store check, not for batch jobs.
+Notes:
 
-### Frontend project
-
-A **second** Vercel project importing the same repo:
-
-* **Root Directory**: `frontend`
-* **Framework Preset**: Next.js
-* Environment variable (set before the build): `BACKEND_URL=https://<backend-project>.vercel.app`
-
-`next.config.ts` bakes the `/api/*` rewrite into the production build, so the
-dashboard proxies to the deployed FastAPI instead of `127.0.0.1:8080`.
+* On Vercel (`VERCEL=1`) the backend auto-routes runtime data to `/tmp` —
+  history, settings, request log and the cards file — so the read-only
+  filesystem is never touched. No environment variables are required.
+* Every push to `main` deploys automatically; `vercel deploy --prod` deploys
+  from the CLI.
+* `middleware.ts` was replaced by `next.config.ts` `headers()` because Edge
+  middleware is not supported in multi-service projects.
+* Deployment Protection is **off** — the whole site is public. Re-enable
+  "Require Log In" in Project Settings → Deployment Protection if you want it
+  gated (the dashboard then works only when you are logged in to Vercel).
 
 ### Serverless caveats
 
@@ -454,8 +456,8 @@ dashboard proxies to the deployed FastAPI instead of `127.0.0.1:8080`.
   jobs usually don't. Job state is in-memory, so a cold start loses running jobs.
 * **`/tmp` is ephemeral**: history, settings and uploaded cards reset on cold
   starts.
-* **No auth**: everything is public. Add your own protection (Vercel's
-  password protection, or an auth layer) before pointing a domain at it.
+* **No auth**: everything is public. Add your own protection before pointing a
+  domain at it.
 
 ---
 
