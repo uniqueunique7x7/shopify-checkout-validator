@@ -1,0 +1,16 @@
+# ---- Python ----
+.venv/
+__pycache__/
+*.py[cod]
+.env
+
+# ---- Node / Next.js ----
+node_modules/
+.next/
+.next-build/
+*.tsbuildinfo
+
+# ---- Runtime data ----
+# Card numbers, checked-card history and request logs must never be committed.
+cards.txt
+backend/data/
