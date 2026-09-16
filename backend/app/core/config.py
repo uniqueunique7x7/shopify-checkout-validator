@@ -19,8 +19,13 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 BACKEND_DIR = PROJECT_ROOT / "backend"
-DATA_DIR = BACKEND_DIR / "data"
-DATA_DIR.mkdir(parents=True, exist_ok=True)
+# Serverless hosts (Vercel, AWS Lambda) only allow writes to /tmp, so the data
+# directory is env-overridable and creation is best-effort.
+DATA_DIR = Path(os.environ.get("DATA_DIR", str(BACKEND_DIR / "data")))
+try:
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+except OSError:
+    pass
 
 LogLevel = Literal["debug", "info", "warning", "error"]
 

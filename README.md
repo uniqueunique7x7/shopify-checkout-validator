@@ -410,7 +410,56 @@ npm run build
 
 ---
 
-## 9. Security notes
+## 9. Deploying to Vercel
+
+The frontend is a perfect Vercel fit; the backend runs there too, but see the
+serverless caveats below — for long batch jobs a long-running host (Render,
+Railway, a VPS) is the better home for the API.
+
+### Backend project
+
+Import this repo in Vercel and set:
+
+* **Root Directory**: `backend`
+* **Framework Preset**: FastAPI (it runs `pip install -r requirements.txt` at build)
+* `backend/vercel.json` rewrites every route to the serverless handler `backend/api/index.py`
+
+Environment variables (Vercel filesystem is read-only except `/tmp`):
+
+```
+DATA_DIR=/tmp/data
+CARDS_FILE=/tmp/cards.txt
+```
+
+`history_file`, `settings.json` and the request log automatically follow
+`DATA_DIR`. Function `maxDuration` is set to 60 (the Hobby maximum) — enough for
+one store check, not for batch jobs.
+
+### Frontend project
+
+A **second** Vercel project importing the same repo:
+
+* **Root Directory**: `frontend`
+* **Framework Preset**: Next.js
+* Environment variable (set before the build): `BACKEND_URL=https://<backend-project>.vercel.app`
+
+`next.config.ts` bakes the `/api/*` rewrite into the production build, so the
+dashboard proxies to the deployed FastAPI instead of `127.0.0.1:8080`.
+
+### Serverless caveats
+
+* **Batch jobs are unreliable**: workers run as asyncio background tasks inside
+  a function invocation; the instance freezes or dies when requests stop
+  (max ~60s on Hobby). Single `/api/check` calls fit in the window, multi-card
+  jobs usually don't. Job state is in-memory, so a cold start loses running jobs.
+* **`/tmp` is ephemeral**: history, settings and uploaded cards reset on cold
+  starts.
+* **No auth**: everything is public. Add your own protection (Vercel's
+  password protection, or an auth layer) before pointing a domain at it.
+
+---
+
+## 10. Security notes
 
 * Input validation happens on the client **and** on the server (site normalization rejects
   anything that is not a real hostname; cards, proxies, price caps and job sizes are validated
@@ -429,7 +478,7 @@ npm run build
 
 ---
 
-## 10. Project structure
+## 11. Project structure
 
 ```
 shopify/
@@ -442,8 +491,10 @@ shopify/
 ├── backend/
 │   ├── requirements.txt
 │   ├── run.py                  launcher
+│   ├── vercel.json             serverless rewrites + function limits
 │   ├── tests/smoke.py          smoke test suite
 │   ├── data/                   requests.txt · history.json · settings.json
+│   ├── api/index.py            Vercel serverless entrypoint
 │   └── app/
 │       ├── main.py             FastAPI app factory
 │       ├── api/
@@ -472,7 +523,7 @@ shopify/
 
 ---
 
-## 11. Troubleshooting
+## 12. Troubleshooting
 
 | Symptom | Fix |
 | ------- | --- |
@@ -489,7 +540,7 @@ shopify/
 
 ---
 
-## 12. Known limitations
+## 13. Known limitations
 
 1. **`/check` vs `/validate`.** In the original code both routes called the same `validate_card()`
    and differed only in the response envelope. That behaviour is preserved: the probe mode returns
