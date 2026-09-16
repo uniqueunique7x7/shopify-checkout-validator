@@ -14,3 +14,5 @@ node_modules/
 # Card numbers, checked-card history and request logs must never be committed.
 cards.txt
 backend/data/
+.vercel
+.env*
