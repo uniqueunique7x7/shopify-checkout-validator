@@ -65,6 +65,7 @@ export function JobRunner({
       jobId={jobId}
       mode={stream.job.params.mode}
       status={stream.status ?? stream.job.status}
+      error={stream.job.error}
       results={stream.results}
       logs={stream.logs}
       total={stream.job.total}

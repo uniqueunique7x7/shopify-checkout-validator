@@ -74,6 +74,9 @@ class Settings(BaseSettings):
 
     # --- storage ----------------------------------------------------------
     history_file: str = str(DATA_DIR / "history.json")
+    jobs_file: str = str(DATA_DIR / "jobs.json")
+    jobs_keep: int = 30
+    job_persist_interval: float = 5.0
     runtime_settings_file: str = str(DATA_DIR / "settings.json")
     history_limit: int = 5000
     history_store_full_cards: bool = False

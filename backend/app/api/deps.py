@@ -10,6 +10,7 @@ from ..core.config import runtime_store, settings
 from ..services.cards import CardsStore
 from ..services.engine import engine, parse_card, parse_proxy
 from ..services.history import HistoryStore
+from ..services.job_store import JobStore
 from ..services.jobs import JobManager
 
 cards_store = CardsStore(settings.cards_file)
@@ -18,7 +19,9 @@ history_store = HistoryStore(
     limit=settings.history_limit,
     store_full_cards=settings.history_store_full_cards,
 )
-jobs = JobManager(engine, cards_store, runtime_store, history_store)
+# Jobs are snapshotted here so a backend restart does not erase them.
+job_store = JobStore(settings.jobs_file, keep=settings.jobs_keep)
+jobs = JobManager(engine, cards_store, runtime_store, history_store, store=job_store)
 runtime = runtime_store
 
 HOST_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$", re.I)

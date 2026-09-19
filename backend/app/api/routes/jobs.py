@@ -283,7 +283,7 @@ async def resume_job(job_id: str) -> dict[str, Any]:
 
 @router.delete("/{job_id}", summary="Cancel and forget a job")
 async def delete_job(job_id: str) -> dict[str, Any]:
-    job = await jobs.cancel(job_id)
+    job = await jobs.forget(job_id)
     if not job:
         raise ApiException("JOB_NOT_FOUND", f"No job with id {job_id}", 404)
     return {"cancelled": True, "id": job_id, "status": job.status}

@@ -297,6 +297,26 @@ The Site validator always sends `mode: "site"` and the Card validator `mode: "ca
 clients that predate the validators), but the dashboard only drives the two validator pages. Jobs
 opened from the jobs list land on whichever validator matches their mode.
 
+### Job persistence (restart recovery)
+
+Jobs run in memory, so a backend restart used to erase them and leave the dashboard showing
+*“this job no longer exists on the server (it may have restarted)”*. Snapshots are now kept in
+`backend/data/jobs.json`:
+
+* written while a job runs (every `JOB_PERSIST_INTERVAL`, default 5s, result rows trimmed) and
+  immediately on every state change — created, paused, resumed, cancelled, finished, failed;
+* the newest `JOBS_KEEP` (default 30) jobs are retained, each with up to 1000 result rows and 400
+  log lines;
+* they are loaded back on startup, so both the `/jobs` list and the job monitor survive a restart;
+* a run that was **still in flight** cannot be resumed (its asyncio task died with the process), so
+  it comes back with everything it produced plus an explicit
+  `Server restarted while this job was still running` error — shown above the results and in the job
+  log — instead of vanishing;
+* `DELETE /api/jobs/{id}` really forgets a job now: memory *and* snapshot.
+
+`run.py` / `uvicorn --reload` restarts the backend on every Python edit, which is the usual trigger.
+Set `RELOAD=0` (or launch via `start.bat` / `dev.ps1`) for long unattended runs.
+
 ### Random targeting (card mode)
 
 The card validator has a **“Random live site per card”** switch. With it on, the job is created with
@@ -566,6 +586,7 @@ shopify/
 | Results are all `NO_PRODUCT` | Raise the price cap or pin a variant — the store has nothing in stock under the cap. |
 | `NO_SHOPIFY_PAYMENTS_GATEWAY` | The store does not expose Shopify Payments (only that gateway can be tested). |
 | Job sits at “queued” | The worker loop is busy on earlier tasks; check `/logs` for transport errors. |
+| A job “disappears” after an edit or restart | Fixed: snapshots in `backend/data/jobs.json` bring it back. A run that was interrupted is restored as `failed` with the reason in the job log. |
 | SSE shows “polling” | A proxy is buffering the stream; the UI fell back to polling automatically. |
 | Empty `requests.txt` | Nothing has been sent yet — run a check. |
 

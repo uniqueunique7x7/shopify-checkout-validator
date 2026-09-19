@@ -17,12 +17,15 @@ import asyncio
 import random
 import time
 import uuid
-from typing import Any, Optional
+from typing import Any, Optional, TYPE_CHECKING
 
 from ..core.config import RuntimeSettingsStore, settings as app_settings
 from ..core.logging import add_entry, log
 from .cards import CardsStore
 from .engine import JobCancelled, ShopifyEngine, classify, mask_card, parse_card
+
+if TYPE_CHECKING:  # pragma: no cover - import cycle guard
+    from .job_store import JobStore
 
 
 def _host_key(site: str) -> str:
@@ -53,6 +56,10 @@ STATUS_FAILED = "failed"
 STATUS_CANCELLED = "cancelled"
 
 TERMINAL = {STATUS_COMPLETED, STATUS_FAILED, STATUS_CANCELLED}
+
+# Results kept in the periodic snapshot of a job that is still running. The
+# final snapshot always carries the full set.
+INFLIGHT_RESULTS = 300
 
 
 class Job:
@@ -151,9 +158,39 @@ class Job:
             data["logs"] = self.logs[-400:]
         return data
 
+    # -- restore -----------------------------------------------------------
+    @classmethod
+    def restore(cls, payload: dict[str, Any]) -> "Job":
+        """Rebuild a job from a persisted snapshot (server restart recovery)."""
+        job = cls(
+            str(payload.get("id") or uuid.uuid4().hex[:12]),
+            payload.get("kind") or "pair",
+            payload.get("params") or {},
+        )
+        job.status = payload.get("status") or STATUS_FAILED
+        job.created_at = float(payload.get("created_at") or time.time())
+        job.started_at = payload.get("started_at")
+        job.finished_at = payload.get("finished_at")
+        job.total = int(payload.get("total") or 0)
+        job.completed = int(payload.get("completed") or 0)
+        job.counters = {"live": 0, "die": 0, "error": 0, "retried": 0, **(payload.get("counters") or {})}
+        job.results = list(payload.get("results") or [])
+        job.logs = list(payload.get("logs") or [])
+        job.error = payload.get("error")
+        job.current = []
+        if job.status not in TERMINAL:
+            # The process that was running it is gone, so it can never finish.
+            # Keep whatever it produced and say plainly why it stopped.
+            job.status = STATUS_FAILED
+            job.error = "Server restarted while this job was still running"
+            job.finished_at = job.finished_at or time.time()
+            job.logs.append({"ts": time.time(), "level": "error", "message": job.error})
+        return job
+
 
 class JobManager:
-    def __init__(self, engine: ShopifyEngine, cards: CardsStore, runtime: RuntimeSettingsStore, history):
+    def __init__(self, engine: ShopifyEngine, cards: CardsStore, runtime: RuntimeSettingsStore, history,
+                 store: Optional["JobStore"] = None):
         self.engine = engine
         self.cards = cards
         self.runtime = runtime
@@ -161,6 +198,53 @@ class JobManager:
         self._jobs: dict[str, Job] = {}
         self._order: list[str] = []
         self._lock = asyncio.Lock()
+        # Snapshots on disk so a restart does not erase finished work.
+        self._store = store
+        self._persisted_at: dict[str, float] = {}
+        if store is not None:
+            self._restore()
+
+    # -- persistence -------------------------------------------------------
+    def _restore(self) -> None:
+        assert self._store is not None
+        try:
+            snapshots = self._store.load()
+        except Exception as ex:
+            log.warning("Could not load persisted jobs: %s", ex)
+            return
+        restored = 0
+        for payload in snapshots:
+            try:
+                job = Job.restore(payload)
+            except Exception as ex:
+                log.warning("Skipping unreadable job snapshot: %s", ex)
+                continue
+            if job.id in self._jobs:
+                continue
+            self._jobs[job.id] = job
+            self._order.append(job.id)
+            restored += 1
+        if restored:
+            log.info("Restored %d job(s) from %s", restored, self._store.path)
+
+    def _persist(self, job: Job, force: bool = False) -> None:
+        """Snapshot a job to disk, throttled unless ``force`` is set."""
+        store = self._store
+        if store is None:
+            return
+        now = time.time()
+        if not force and now - self._persisted_at.get(job.id, 0.0) < app_settings.job_persist_interval:
+            return
+        self._persisted_at[job.id] = now
+        try:
+            snapshot = job.to_dict()
+            if job.status not in TERMINAL:
+                # A long run would otherwise rewrite every result every few
+                # seconds; the final write carries the whole set.
+                snapshot["results"] = snapshot.get("results", [])[-INFLIGHT_RESULTS:]
+            store.upsert(snapshot)
+        except Exception as ex:
+            log.warning("Could not persist job %s: %s", job.id, ex)
 
     # -- lifecycle ---------------------------------------------------------
     async def shutdown(self) -> None:
@@ -168,6 +252,8 @@ class JobManager:
             if job.status in (STATUS_RUNNING, STATUS_PAUSED, STATUS_QUEUED):
                 job.cancel_requested = True
                 job.pause_gate.set()
+                # keep whatever the run gathered before the process exits
+                self._persist(job, force=True)
             if job.task and not job.task.done():
                 job.task.cancel()
 
@@ -200,6 +286,19 @@ class JobManager:
             job.finished_at = time.time()
         await job.push_log("Cancellation requested", level="warning")
         await job.emit({"type": "status", "status": job.status, "cancel_requested": True})
+        self._persist(job, force=True)
+        return job
+
+    async def forget(self, job_id: str) -> Optional[Job]:
+        """Cancel a job and drop it entirely — memory, snapshots and all."""
+        job = await self.cancel(job_id)
+        if not job:
+            return None
+        self._jobs.pop(job_id, None)
+        self._persisted_at.pop(job_id, None)
+        self._order = [i for i in self._order if i != job_id]
+        if self._store is not None:
+            self._store.remove(job_id)
         return job
 
     async def pause(self, job_id: str) -> Optional[Job]:
@@ -212,6 +311,7 @@ class JobManager:
             job.status = STATUS_PAUSED
         await job.push_log("Job paused by operator", level="warning")
         await job.emit({"type": "status", "status": job.status})
+        self._persist(job, force=True)
         return job
 
     async def resume(self, job_id: str) -> Optional[Job]:
@@ -224,6 +324,7 @@ class JobManager:
             job.status = STATUS_RUNNING
         await job.push_log("Job resumed")
         await job.emit({"type": "status", "status": job.status})
+        self._persist(job, force=True)
         return job
 
     def prune(self, keep: int = 60) -> None:
@@ -233,6 +334,9 @@ class JobManager:
             if job is None or (job.status in TERMINAL and not job._subscribers):
                 self._order.pop(0)
                 self._jobs.pop(old, None)
+                self._persisted_at.pop(old, None)
+                if self._store is not None:
+                    self._store.remove(old)
             else:
                 break
 
@@ -358,6 +462,7 @@ class JobManager:
         self._jobs[job_id] = job
         self._order.append(job_id)
         self.prune()
+        self._persist(job, force=True)
         job.task = asyncio.create_task(self._run_batch(job, tasks, proxy, variant_id))
         return job
 
@@ -446,6 +551,7 @@ class JobManager:
                 job.finished_at = time.time()
                 await job.push_log(job.error, level="error")
                 await job.emit({"type": "status", "status": job.status, "error": job.error})
+                self._persist(job, force=True)
                 return
 
             cursor = 0
@@ -688,6 +794,7 @@ class JobManager:
             job.finished_at = time.time()
             await job.push_log("Job cancelled (server shutdown)", level="warning")
             await job.emit({"type": "status", "status": job.status})
+            self._persist(job, force=True)
             raise
         except Exception as ex:
             log.exception("job %s failed", job.id)
@@ -696,6 +803,7 @@ class JobManager:
             job.finished_at = time.time()
             await job.push_log(job.error, level="error")
             await job.emit({"type": "status", "status": job.status, "error": job.error})
+            self._persist(job, force=True)
             return
 
         job.finished_at = time.time()
@@ -714,6 +822,7 @@ class JobManager:
         job.current = []
         self.engine.stats["jobs_finished"] += 1
         await job.emit({"type": "status", "status": job.status})
+        self._persist(job, force=True)
         add_entry("INFO", "shopify.jobs", f"job {job.id} {job.status}")
 
     @staticmethod
@@ -743,8 +852,9 @@ class JobManager:
             "attempts": attempts,
         }
 
-    @staticmethod
-    async def _emit_progress(job: Job) -> None:
+    async def _emit_progress(self, job: Job) -> None:
+        # throttled on-disk snapshot, so a restart keeps the run so far
+        self._persist(job)
         await job.emit({
             "type": "progress",
             "completed": job.completed,

@@ -53,6 +53,7 @@ export function JobMonitor({
   jobId,
   mode = "site",
   status,
+  error,
   results,
   logs,
   total,
@@ -70,6 +71,8 @@ export function JobMonitor({
   /** Decides the wording of the three result buckets (card vs store verdicts). */
   mode?: JobMode;
   status: JobStatus;
+  /** Set when the job stopped on its own — e.g. the backend restarted mid-run. */
+  error?: string | null;
   results: ResultRecord[];
   logs: LogLine[];
   total: number;
@@ -192,6 +195,11 @@ export function JobMonitor({
 
       <Card>
         <CardContent className="space-y-3 p-3">
+          {error ? (
+            <p className="rounded-md border border-destructive/30 bg-destructive/5 p-2 text-[11px] text-destructive">
+              {error}
+            </p>
+          ) : null}
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div className="flex min-w-0 items-center gap-2 text-xs">
               <Badge
