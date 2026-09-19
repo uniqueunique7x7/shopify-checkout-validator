@@ -22,7 +22,7 @@ from typing import Any, Optional, TYPE_CHECKING
 from ..core.config import RuntimeSettingsStore, settings as app_settings
 from ..core.logging import add_entry, log
 from .cards import CardsStore
-from .engine import JobCancelled, ShopifyEngine, classify, mask_card, parse_card
+from .engine import JobCancelled, ShopifyEngine, classify, is_store_error, mask_card, parse_card
 
 if TYPE_CHECKING:  # pragma: no cover - import cycle guard
     from .job_store import JobStore
@@ -31,22 +31,6 @@ if TYPE_CHECKING:  # pragma: no cover - import cycle guard
 def _host_key(site: str) -> str:
     """Normalise a store URL to a bare host, for per-domain bookkeeping."""
     return site.strip().rstrip("/").lower().removeprefix("https://").removeprefix("http://")
-
-
-# Store-level failures ban a host for the rest of a card job: more cards at a
-# captcha-walled or throttled store just burn time. Card-level failures
-# (tokenization, submit) say nothing about the store — banning on them used to
-# take the whole target out of a run after a single rate-limited card.
-STORE_ERRORS = {
-    "CAPTCHA_REQUIRED", "THROTTLED", "TIMEOUT", "NO_PRODUCT",
-    "NO_SHOPIFY_PAYMENTS_GATEWAY", "SESSION_EXPIRED", "CHECKPOINTDENIED",
-    "GRAPHQL_ERROR", "SITE_REQUIRES_LOGIN", "NO_SELLER_PROPOSAL",
-    "NEGOTIATE_FAILED",
-}
-
-
-def _bans_site(response: str) -> bool:
-    return (response or "").split(":", 1)[0].strip().upper() in STORE_ERRORS
 
 STATUS_QUEUED = "queued"
 STATUS_RUNNING = "running"
@@ -728,7 +712,7 @@ class JobManager:
                             break
                         if (result.get("bucket") or "error") != "error":
                             break
-                        if mode == "card" and _bans_site(result.get("Response", "")):
+                        if mode == "card" and is_store_error(result.get("Response", "")):
                             key = _host_key(target)
                             job.bad_sites.add(key)
                             await job.push_log(

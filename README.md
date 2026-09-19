@@ -156,6 +156,8 @@ npm start
 | `POOL_SIZE` / `POOL_PER_HOST` | `500` / `25`               | curl_cffi connection pool                   |
 | `CONNECT_TIMEOUT` / `REQUEST_TIMEOUT` | `8` / `35`          | Timeouts in seconds                         |
 | `CACHE_TTL`                | `300`                         | Product cache lifetime (seconds)            |
+| `VAULT_CONCURRENCY`        | `3`                           | Parallel card-tokenization calls (PCI vault) |
+| `VAULT_PACE`               | `0.35`                        | Minimum gap between tokenization calls (s)  |
 | `DEFAULT_CONCURRENCY`      | `3`                           | Default batch workers                       |
 | `DEFAULT_RETRIES`          | `1`                           | Default attempts per task                   |
 | `MAX_BATCH_TASKS`          | `50000`                       | Sites (or cards) allowed per job            |
@@ -375,16 +377,20 @@ Requests** even though the store itself is perfectly healthy.
 
 * a throttled tokenization is **retried** (`VAULT_ATTEMPTS`, default 3), honouring `Retry-After` when
 the vault sends one and otherwise backing off ~1s → 2s with jitter, before giving up;
+* all workers share **one limiter** for the vault — `VAULT_CONCURRENCY` (default 3) parallel calls with
+a `VAULT_PACE` (default 0.35s) gap between them. Twenty workers each opening their own vault session
+is what earns a 429, not the store being tested, so this is the setting that keeps a big card scan
+healthy;
 * only then is `deposit.shopifyinc.com/sessions` tried once as a backup host;
-* if it still fails, the row carries the reason instead of a bare code —
-`TOKENIZATION_FAILED: HTTP 429 Too Many Requests`, with the full text in the `detail` column and in
-the TXT/CSV/JSON exports — so a vault throttle is never mistaken for a dead card;
+* if it still fails, the row carries the reason instead of a bare code — the **primary** host's
+reason, e.g. `TOKENIZATION_FAILED: HTTP 429 Too Many Requests`, with the backup host's problem
+noted separately in `detail` (a dead backup host is not what stopped your card);
 * the store is **not** banned for it (see the rule above), so the remaining cards still target the
 store you chose instead of spilling onto random pool sites.
 
-Practical note: `site_concurrency` (Settings, default 15) caps how many parallel flows one host may
-run. A card scan aims every worker at one store, so lowering `workers` is the quickest way to stay
-under the vault's limit.
+Practical note: if you still see `HTTP 429`, lower `VAULT_CONCURRENCY` (or `VAULT_PACE` up) before
+lowering `workers`. `site_concurrency` (Settings, default 15) separately caps how many parallel flows
+one host may run.
 
 ### Live site pool
 

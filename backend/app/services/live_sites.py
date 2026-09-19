@@ -15,6 +15,7 @@ import time
 from typing import Any
 
 from ..core.config import settings as app_settings
+from ..services.engine import is_store_error
 from ..services.jobs import TERMINAL, JobManager
 from ..services.history import HistoryStore
 
@@ -120,6 +121,10 @@ def _build(
                     if str(row.get("response", "")) == "CANCELLED":
                         # A cancel is the user's call, not a store failure.
                         continue
+                    if not is_store_error(str(row.get("response", ""))):
+                        # A card-level failure (e.g. the PCI vault throttling us)
+                        # says nothing about this store.
+                        continue
                     key = host_key(site)
                     card_errors[key] = card_errors.get(key, 0) + 1
                 elif card_job and bucket:
@@ -147,6 +152,8 @@ def _build(
             elif bucket == "error":
                 if str(item.get("response", "")) == "CANCELLED":
                     # A cancel is the user's call, not a store failure.
+                    continue
+                if not is_store_error(str(item.get("response", ""))):
                     continue
                 key = host_key(site)
                 if key:

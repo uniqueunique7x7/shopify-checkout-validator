@@ -256,6 +256,22 @@ ERROR_RESPONSES = frozenset({
     "NO_PAYMENT_REQUIRED", "NETWORK_ERROR", "CANCELLED",
 })
 
+# Failures that are the *store's* fault: a captcha wall, throttling, a dead
+# gateway. Card-level failures (tokenization, submit) say nothing about the store,
+# so they neither ban a host for a job nor count against the live-site pool.
+STORE_ERRORS = frozenset({
+    "CAPTCHA_REQUIRED", "THROTTLED", "TIMEOUT", "NO_PRODUCT",
+    "NO_SHOPIFY_PAYMENTS_GATEWAY", "SESSION_EXPIRED", "CHECKPOINTDENIED",
+    "GRAPHQL_ERROR", "SITE_REQUIRES_LOGIN", "NO_SELLER_PROPOSAL",
+    "NEGOTIATE_FAILED",
+})
+
+
+def is_store_error(response: str) -> bool:
+    """True when a failure points at the store rather than at the card."""
+    return (response or "").split(":", 1)[0].strip().upper() in STORE_ERRORS
+
+
 # The *card check* live set. A card is good only when it charged or the issuer
 # reported insufficient funds; every other processed answer (declined, expired,
 # invalid CVC, 3DS required, …) is a decline from the card's point of view — even
@@ -512,6 +528,49 @@ def vault_retry_delay(response: Any, attempt: int) -> float:
     except Exception:
         pass
     return min(VAULT_MAX_BACKOFF, 0.8 * (2 ** (attempt - 1))) + random.uniform(0, 0.4)
+
+
+# One limiter for the whole process: 50 workers each opening their own vault
+# session is what earns a 429, not the store being tested.
+_vault_sem: Optional[asyncio.Semaphore] = None
+_vault_pace_lock: Optional[asyncio.Lock] = None
+_vault_last_call = 0.0
+
+
+def _vault_semaphore() -> asyncio.Semaphore:
+    global _vault_sem
+    if _vault_sem is None:
+        _vault_sem = asyncio.Semaphore(max(1, app_settings.vault_concurrency))
+    return _vault_sem
+
+
+async def _vault_pace() -> None:
+    """Keep a minimum gap between vault calls, so a burst cannot trip the limit."""
+    global _vault_pace_lock, _vault_last_call
+    pace = app_settings.vault_pace
+    if pace <= 0:
+        return
+    if _vault_pace_lock is None:
+        _vault_pace_lock = asyncio.Lock()
+    async with _vault_pace_lock:
+        wait = _vault_last_call + pace - time.monotonic()
+        if wait > 0:
+            await asyncio.sleep(wait)
+        _vault_last_call = time.monotonic()
+
+
+_CURL_HINT_RE = re.compile(r"\s*See https?://\S+\s*first for more details\.?", re.I)
+_DNS_HOST_RE = re.compile(r"Could not resolve host:\s*([^\s\"']+)", re.I)
+
+
+def _short_error(text: Any, limit: int = 120) -> str:
+    """One compact line for a transport error (curl's boilerplate is just noise)."""
+    message = _CURL_HINT_RE.sub("", str(text))
+    message = " ".join(message.split())
+    dns = _DNS_HOST_RE.search(message)
+    if dns:
+        message = f"DNS failure resolving {dns.group(1).rstrip('.')}"
+    return message[:limit] + ("…" if len(message) > limit else "")
 
 
 def vault_error(status: int, body: Any, parsed: Any) -> str:
@@ -1503,8 +1562,10 @@ class ShopifyEngine:
                     "https://deposit.shopifyinc.com/sessions",
                 ]
                 token = None
-                vault_fail = ""
+                failures: list[str] = []
                 for vault_url in vault_endpoints:
+                    vault_host = urlparse(vault_url).netloc
+                    last_fail = ""
                     for vault_attempt in range(1, VAULT_ATTEMPTS + 1):
                         if vault_url != vault_endpoints[0] and vault_attempt > 1:
                             # the backup host gets a single shot per pass
@@ -1512,9 +1573,11 @@ class ShopifyEngine:
                         vr = None
                         status_code = 0
                         try:
-                            vr = await session.post(
-                                vault_url, label="vault", json=vault_payload, headers=vault_headers
-                            )
+                            async with _vault_semaphore():
+                                await _vault_pace()
+                                vr = await session.post(
+                                    vault_url, label="vault", json=vault_payload, headers=vault_headers
+                                )
                             status_code = int(getattr(vr, "status_code", 0) or 0)
                             try:
                                 vd = orjson.loads(vr.content)
@@ -1523,28 +1586,32 @@ class ShopifyEngine:
                             token = vd.get("id") if isinstance(vd, dict) else None
                             if token:
                                 break
-                            vault_fail = vault_error(status_code, vr.content, vd)
+                            last_fail = vault_error(status_code, vr.content, vd)
                         except Exception as ex:
                             status_code = 0
-                            vault_fail = f"{type(ex).__name__}: {ex}"
+                            last_fail = _short_error(f"{type(ex).__name__}: {ex}")
                         if status_code in VAULT_RETRY_STATUS and vault_attempt < VAULT_ATTEMPTS:
                             delay = vault_retry_delay(vr, vault_attempt)
                             log.debug(
                                 "vault %s attempt %d/%d → %s, retrying in %.1fs",
-                                vault_url, vault_attempt, VAULT_ATTEMPTS, vault_fail, delay,
+                                vault_url, vault_attempt, VAULT_ATTEMPTS, last_fail, delay,
                             )
                             await asyncio.sleep(delay)
                             continue
                         break
                     if token:
                         break
+                    if last_fail:
+                        failures.append(f"{vault_host}: {last_fail}")
 
                 if not token:
-                    reason = vault_fail or "the vault returned no token"
-                    return _r(
-                        f"TOKENIZATION_FAILED: {reason}",
-                        detail=f"PCI vault could not tokenize the card — {reason}",
-                    )
+                    # Report the primary host's reason — the backup host's DNS or
+                    # connection error is not what actually stopped the card.
+                    reason = failures[0] if failures else "the vault returned no token"
+                    detail = f"PCI vault could not tokenize the card — {reason}"
+                    if len(failures) > 1:
+                        detail += f" (backup {failures[-1]})"
+                    return _r(f"TOKENIZATION_FAILED: {reason}", detail=detail)
 
                 # ── 6. Submit for completion ─────────────────────────────
                 await self._step(on_step, "submitting for completion")

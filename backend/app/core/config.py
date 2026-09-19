@@ -60,6 +60,12 @@ class Settings(BaseSettings):
     request_timeout: float = 35.0
     cache_ttl: float = 300.0
 
+    # --- card tokenization (PCI vault) ------------------------------------
+    # The vault rate-limits by IP, so job workers share one limiter instead of
+    # each hammering it. Raise only if Shopify stops answering 429.
+    vault_concurrency: int = 3
+    vault_pace: float = 0.35
+
     # --- defaults for batch jobs -----------------------------------------
     default_concurrency: int = 3
     default_retries: int = 1
