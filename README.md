@@ -274,7 +274,6 @@ Error bucket: `THROTTLED`, `TIMEOUT`, `GRAPHQL_ERROR`,
 | `/`             | Dashboard: KPIs, recent jobs, response distribution, single-store validation  |
 | `/site-validator` | **Site validator** — many stores, one task each. Finds stores with a live gateway |
 | `/card-validator` | **Card validator** — many cards against one store, or one random store per card (live pool or your own list) |
-| `/bulk-checker` | Combined workspace with an explicit mode switch: stores-only, cards-on-one-store, or paired lists |
 | `/jobs`         | All jobs with live progress bars                                              |
 | `/stores`       | Product discovery, variant IDs, jump straight into validation                 |
 | `/cards`        | `cards.txt` manager with BIN statistics                                       |
@@ -293,8 +292,10 @@ Every job carries a `mode` that decides how the task list is built:
 | `card` + `random_target` | One task per card, each on its own store — the pool is the supplied `sites`, or the live-site pool when none are sent | Each task carries its own card |
 | `pair` | Index-paired: `tasks[i] = (sites[i % n], cards[i % m])` | Index-paired lists                  |
 
-The Site validator always sends `mode: "site"`, the Card validator `mode: "card"`. The Bulk checker
-lets you choose. `mode` defaults to `pair` for backwards compatibility with existing API clients.
+The Site validator always sends `mode: "site"` and the Card validator `mode: "card"`. `pair` and
+`site` stay supported by the API for backwards compatibility (and `mode` defaults to `pair` for
+clients that predate the validators), but the dashboard only drives the two validator pages. Jobs
+opened from the jobs list land on whichever validator matches their mode.
 
 ### Random targeting (card mode)
 
@@ -364,8 +365,8 @@ visible rows are in the DOM. A pool of thousands of stores behaves like a pool o
 UX details: dark/light/system theme, responsive layouts (sidebar becomes a drawer under `lg`),
 skeleton loaders, empty/error states with retry, confirmation dialogs for destructive actions,
 copy-to-clipboard everywhere, debounced/instant search filters, drag-and-drop **or
-click-to-pick** `.txt` import for stores and cards on all three workspaces (site validator,
-card validator, bulk checker — the file picker and the drop zone share the same cleaner, so both
+click-to-pick** `.txt` import for stores and cards on both validators (site validator and
+card validator — the file picker and the drop zone share the same cleaner, so both
 report how many usable lines were loaded), last-job restore after a refresh, and
 `prefers-reduced-motion` support.
 
@@ -516,11 +517,11 @@ shopify/
 │           ├── history.py      JSON history store
 │           └── live_sites.py   aggregated live-site pool (paginated, memoised)
 └── frontend/
-    ├── app/                    dashboard · batch · jobs · stores · cards · history · logs · settings
+    ├── app/                    dashboard · site/card validators · jobs · stores · cards · history · logs · settings
     ├── components/
     │   ├── ui/                 shadcn-style primitives
     │   ├── layout/             app shell, sidebar, topbar, theme, status
-│   │   ├── batch/              site/card validators, bulk checker, job monitor, log panel,
+│   │   ├── batch/              site/card validators, job monitor, log panel,
 │   │   │                       run settings, input panels, stat tiles
 │   │   └── validate/           single-store form + result panel
 │   ├── hooks/                  use-job-stream (SSE) · use-job-launcher (submission)

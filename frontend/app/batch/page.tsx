@@ -1,11 +1,11 @@
 import { redirect } from "next/navigation";
 
-/** The combined workspace moved to /bulk-checker; keep old links working. */
+/** The combined workspace is gone; old deep links land on the site validator. */
 export default async function LegacyBatchRedirect({
   searchParams,
 }: {
   searchParams: Promise<{ job?: string }>;
 }) {
   const { job } = await searchParams;
-  redirect(job ? `/bulk-checker?job=${job}` : "/bulk-checker");
+  redirect(job ? `/site-validator?job=${job}` : "/site-validator");
 }

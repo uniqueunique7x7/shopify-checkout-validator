@@ -10,8 +10,8 @@ export default function NotFound() {
         <p className="font-mono text-4xl font-semibold text-primary">404</p>
         <p className="text-sm font-semibold">This page does not exist</p>
         <p className="text-xs text-muted-foreground">
-          Check the sidebar for the available workspaces: dashboard, bulk checker, jobs, stores, cards, history, logs and
-          settings.
+          Check the sidebar for the available workspaces: dashboard, site validator, card validator, jobs, stores,
+          cards, history, logs and settings.
         </p>
         <Button asChild size="sm">
           <Link href="/">Back to dashboard</Link>

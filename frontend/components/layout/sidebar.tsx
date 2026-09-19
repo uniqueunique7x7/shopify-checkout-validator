@@ -8,7 +8,6 @@ import {
   CreditCard,
   History,
   LayoutDashboard,
-  ListChecks,
   Settings,
   Store,
   Terminal,
@@ -29,7 +28,6 @@ const GROUPS: { label?: string; items: { href: string; label: string; icon: type
     items: [
       { href: "/site-validator", label: "Site validator", icon: Store },
       { href: "/card-validator", label: "Card validator", icon: CreditCard },
-      { href: "/bulk-checker", label: "Bulk checker", icon: ListChecks },
     ],
   },
   {

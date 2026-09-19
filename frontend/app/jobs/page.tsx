@@ -5,7 +5,7 @@ import useSWR from "swr";
 import { Activity, RefreshCcw } from "lucide-react";
 
 import { api } from "@/lib/api";
-import { bucketLabels, formatDateTime, formatDuration, formatNumber } from "@/lib/utils";
+import { bucketLabels, formatDateTime, formatDuration, formatNumber, jobHref } from "@/lib/utils";
 import type { JobStatus } from "@/types/api";
 
 import { PageHeader } from "@/components/layout/page-header";
@@ -129,7 +129,7 @@ export default function JobsPage() {
                     <TableCell className="font-mono text-xs">{formatDuration(job.elapsed)}</TableCell>
                     <TableCell className="text-right">
                       <Button asChild variant="ghost" size="sm">
-                        <Link href={`/bulk-checker?job=${job.id}`}>Open</Link>
+                        <Link href={jobHref(job.id, job.params.mode)}>Open</Link>
                       </Button>
                     </TableCell>
                   </TableRow>

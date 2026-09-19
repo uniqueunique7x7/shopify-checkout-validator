@@ -1,6 +1,8 @@
 import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
 
+import type { JobMode } from "@/types/api";
+
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
@@ -103,6 +105,15 @@ export function splitLines(text: string): string[] {
     .split("\n")
     .map((line) => line.trim())
     .filter((line) => line.length > 0 && !line.startsWith("#"));
+}
+
+/**
+ * Which validator page shows a job's live monitor. Card jobs belong on the card
+ * validator; site and paired jobs both render fine on the site validator.
+ */
+export function jobHref(id: string, mode?: JobMode | null): string {
+  const base = mode === "card" ? "/card-validator" : "/site-validator";
+  return `${base}?job=${id}`;
 }
 
 export function downloadText(filename: string, text: string, mime = "text/plain") {

@@ -7,7 +7,7 @@ import { Suspense, lazy } from "react";
 import { Activity, CreditCard, Database, Gauge, Store } from "lucide-react";
 
 import { api } from "@/lib/api";
-import { formatNumber } from "@/lib/utils";
+import { formatNumber, jobHref } from "@/lib/utils";
 import { PageHeader } from "@/components/layout/page-header";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -57,7 +57,7 @@ function DashboardContent() {
       <PageHeader
         eyebrow="Dashboard"
         title="Validate a Shopify checkout"
-        description="Run the async engine against a single store, or jump into the bulk checker for multi-store jobs."
+        description="Run the async engine against a single store, or jump into a validator for multi-store jobs."
         actions={
           <div className="flex flex-wrap gap-2">
             <Button asChild variant="outline">
@@ -114,12 +114,12 @@ function DashboardContent() {
             {!jobs ? (
               <Skeleton className="h-16 w-full" />
             ) : jobs.items.length === 0 ? (
-              <p className="text-xs text-muted-foreground">No jobs yet. Start one from the bulk checker.</p>
+              <p className="text-xs text-muted-foreground">No jobs yet. Start one from a validator.</p>
             ) : (
               jobs.items.map((job) => (
                 <Link
                   key={job.id}
-                  href={`/bulk-checker?job=${job.id}`}
+                  href={jobHref(job.id, job.params.mode)}
                   className="flex items-center justify-between gap-3 rounded-md border border-border px-3 py-2 text-xs transition-colors hover:bg-accent"
                 >
                   <span className="font-mono">{job.id}</span>

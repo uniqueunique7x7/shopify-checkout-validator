@@ -64,7 +64,7 @@ export default function StoresPage() {
     }
     if (sites.length > 1) {
       toast.info("Probing the first store", {
-        description: "Use the bulk checker to scan many stores at once.",
+        description: "Use the site validator to scan many stores at once.",
       });
     }
     setSite(sites[0]);
