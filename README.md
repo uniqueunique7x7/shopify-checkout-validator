@@ -332,16 +332,39 @@ next store** and keeps moving until it lands a verdict or runs out of stores:
   stores were visited (also exported in the TXT/CSV/JSON results);
 * the UI marks such rows with `×N stores`.
 
-**A store that errors is banned for the rest of the job.** The first card error on a store
-(`CAPTCHA_REQUIRED`, `THROTTLED`, `TIMEOUT`, `NO_PRODUCT`, …) makes it a *bad site*: the errored
-card rolls to the next store, and every later card skips it
-(`skipping store-x — banned after an earlier card error`). A card with no usable store left is
-reported as `NO_TARGET_AVAILABLE`. Separately, a store that collects `CARD_ERROR_LIMIT` (default 2)
-card errors *across jobs* — in the running job or in history — is dropped from the live pool
-entirely. That count is "errors since the store last proved itself": any later live row or real
+**A store that errors is banned for the rest of the job** — but only when the *store* is at fault.
+`CAPTCHA_REQUIRED`, `THROTTLED`, `TIMEOUT`, `NO_PRODUCT`, `NO_SHOPIFY_PAYMENTS_GATEWAY`,
+`SESSION_EXPIRED`, `CHECKPOINTDENIED`, `GRAPHQL_ERROR` and friends make the host a *bad site*: the
+errored card rolls to the next store, and every later card skips it
+(`skipping store-x — banned after an earlier card error`). Card-level failures
+(`TOKENIZATION_FAILED`, `SUBMIT_FAILED`) say nothing about the store, so they no longer ban it —
+one rate-limited card used to take the whole target out of the run. A card with no usable store
+left is reported as `NO_TARGET_AVAILABLE`. Separately, a store that collects `CARD_ERROR_LIMIT`
+(default 2) card errors *across jobs* — in the running job or in history — is dropped from the live
+pool entirely. That count is "errors since the store last proved itself": any later live row or real
 card verdict resets it, so a store that recovers returns to the pool on its own.
 Cancelling a job is *your* call, not the store's: `CANCELLED` rows never ban a site in the running
 job and never count toward the pool quarantine.
+
+### Card tokenization (PCI vault)
+
+Tokenizing the card is the one step that happens off the store
+(`checkout.pci.shopifyinc.com/sessions`), and it is the step Shopify rate-limits. Burst several cards
+at one store — which is exactly what a card scan does — and the vault answers **429 Too Many
+Requests** even though the store itself is perfectly healthy.
+
+* a throttled tokenization is **retried** (`VAULT_ATTEMPTS`, default 3), honouring `Retry-After` when
+the vault sends one and otherwise backing off ~1s → 2s with jitter, before giving up;
+* only then is `deposit.shopifyinc.com/sessions` tried once as a backup host;
+* if it still fails, the row carries the reason instead of a bare code —
+`TOKENIZATION_FAILED: HTTP 429 Too Many Requests`, with the full text in the `detail` column and in
+the TXT/CSV/JSON exports — so a vault throttle is never mistaken for a dead card;
+* the store is **not** banned for it (see the rule above), so the remaining cards still target the
+store you chose instead of spilling onto random pool sites.
+
+Practical note: `site_concurrency` (Settings, default 15) caps how many parallel flows one host may
+run. A card scan aims every worker at one store, so lowering `workers` is the quickest way to stay
+under the vault's limit.
 
 ### Live site pool
 

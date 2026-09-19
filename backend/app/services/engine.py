@@ -485,6 +485,54 @@ def extract_sst(text: str, headers: dict) -> Optional[str]:
     return None
 
 
+# ---------------------------------------------------------------------------
+# PCI vault tokenization
+# ---------------------------------------------------------------------------
+# The vault rate-limits hard: a card list fired at one store makes it answer 429,
+# and every card then used to come back as a bare TOKENIZATION_FAILED. Retry the
+# throttled ones, and keep the reason for whatever still fails.
+VAULT_ATTEMPTS = 3
+VAULT_RETRY_STATUS = {429, 500, 502, 503, 504}
+VAULT_MAX_BACKOFF = 8.0
+VAULT_STATUS_TEXT = {
+    400: "Bad Request", 401: "Unauthorized", 403: "Forbidden", 404: "Not Found",
+    422: "Unprocessable Entity", 429: "Too Many Requests",
+    500: "Internal Server Error", 502: "Bad Gateway", 503: "Service Unavailable",
+    504: "Gateway Timeout",
+}
+
+
+def vault_retry_delay(response: Any, attempt: int) -> float:
+    """Honour Retry-After when the vault sends one, otherwise back off with jitter."""
+    try:
+        headers = getattr(response, "headers", None) or {}
+        raw = headers.get("retry-after") or headers.get("Retry-After")
+        if raw:
+            return max(0.5, min(float(str(raw).strip()), VAULT_MAX_BACKOFF))
+    except Exception:
+        pass
+    return min(VAULT_MAX_BACKOFF, 0.8 * (2 ** (attempt - 1))) + random.uniform(0, 0.4)
+
+
+def vault_error(status: int, body: Any, parsed: Any) -> str:
+    """Short, human-readable reason the vault would not tokenize the card."""
+    message = ""
+    if isinstance(parsed, dict):
+        for key in ("error", "message", "error_message", "errors", "detail"):
+            value = parsed.get(key)
+            if value:
+                message = value if isinstance(value, str) else orjson.dumps(value).decode()
+                break
+    if not message and not isinstance(parsed, dict):
+        # A non-JSON body is an error page whose text merely repeats the status,
+        # so prefer the standard reason phrase over dumping HTML into the result.
+        message = VAULT_STATUS_TEXT.get(status, "")
+    message = " ".join(str(message).split())[:140]
+    if message:
+        return f"HTTP {status} {message}" if status else message
+    return f"HTTP {status}" if status else "no response"
+
+
 def normalize_response(raw: Optional[str]) -> str:
     """Map raw Shopify / transport error text to a standard code."""
     if not raw:
@@ -861,9 +909,10 @@ class ShopifyEngine:
         hostname = urlparse(ourl).netloc
         ua = random.choice(USER_AGENTS)
 
-        def _r(response: str, charged: str = "False", approved: str = "False") -> dict:
+        def _r(response: str, charged: str = "False", approved: str = "False",
+               detail: Optional[str] = None) -> dict:
             info = classify(response, approved)
-            return {
+            result = {
                 "Response": response,
                 "CC": f"{cc}|{month}|{year}|{cvv}",
                 "CCMasked": mask_card(f"{cc}|{month}|{year}|{cvv}"),
@@ -877,6 +926,9 @@ class ShopifyEngine:
                 "ElapsedMs": round((time.time() - t0) * 1000),
                 **info,
             }
+            if detail:
+                result["Detail"] = detail
+            return result
 
         sem = self._sem(hostname)
         session = self.make_session(proxy_str)
@@ -1451,18 +1503,48 @@ class ShopifyEngine:
                     "https://deposit.shopifyinc.com/sessions",
                 ]
                 token = None
+                vault_fail = ""
                 for vault_url in vault_endpoints:
-                    try:
-                        vr = await session.post(vault_url, label="vault", json=vault_payload, headers=vault_headers)
-                        vd = orjson.loads(vr.content)
-                        token = vd.get("id")
-                        if token:
+                    for vault_attempt in range(1, VAULT_ATTEMPTS + 1):
+                        if vault_url != vault_endpoints[0] and vault_attempt > 1:
+                            # the backup host gets a single shot per pass
                             break
-                    except Exception:
-                        continue
+                        vr = None
+                        status_code = 0
+                        try:
+                            vr = await session.post(
+                                vault_url, label="vault", json=vault_payload, headers=vault_headers
+                            )
+                            status_code = int(getattr(vr, "status_code", 0) or 0)
+                            try:
+                                vd = orjson.loads(vr.content)
+                            except Exception:
+                                vd = None
+                            token = vd.get("id") if isinstance(vd, dict) else None
+                            if token:
+                                break
+                            vault_fail = vault_error(status_code, vr.content, vd)
+                        except Exception as ex:
+                            status_code = 0
+                            vault_fail = f"{type(ex).__name__}: {ex}"
+                        if status_code in VAULT_RETRY_STATUS and vault_attempt < VAULT_ATTEMPTS:
+                            delay = vault_retry_delay(vr, vault_attempt)
+                            log.debug(
+                                "vault %s attempt %d/%d → %s, retrying in %.1fs",
+                                vault_url, vault_attempt, VAULT_ATTEMPTS, vault_fail, delay,
+                            )
+                            await asyncio.sleep(delay)
+                            continue
+                        break
+                    if token:
+                        break
 
                 if not token:
-                    return _r("TOKENIZATION_FAILED")
+                    reason = vault_fail or "the vault returned no token"
+                    return _r(
+                        f"TOKENIZATION_FAILED: {reason}",
+                        detail=f"PCI vault could not tokenize the card — {reason}",
+                    )
 
                 # ── 6. Submit for completion ─────────────────────────────
                 await self._step(on_step, "submitting for completion")
