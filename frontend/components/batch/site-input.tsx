@@ -1,17 +1,13 @@
 "use client";
 
-import { useState } from "react";
-import { Wand2 } from "lucide-react";
-import { toast } from "sonner";
-
-import { cleanSiteList, splitLines } from "@/lib/utils";
+import { splitLines } from "@/lib/utils";
 
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { StatStrip, StatTile } from "@/components/batch/stat-tile";
 import { Badge } from "@/components/ui/badge";
-import { LoadFileButton } from "@/components/ui/load-file-button";
+import { SiteListField } from "@/components/batch/site-list-field";
 
 /**
  * Step 1 of a site scan: paste the stores to test. Cards are optional — when
@@ -32,79 +28,22 @@ export function SiteInput({
   availableCards: number;
   onLoadFromFile: () => void;
 }) {
-  const [dragging, setDragging] = useState(false);
   const siteLines = splitLines(sites);
-
-  function handleClean() {
-    const before = siteLines.length;
-    const cleaned = cleanSiteList(sites);
-    const after = splitLines(cleaned).length;
-    onSitesChange(cleaned);
-    if (!before) return;
-    toast.success(`Kept ${after} of ${before} line(s)`, {
-      description:
-        after < before ? `${before - after} dropped as invalid or duplicate.` : "Nothing needed changing.",
-    });
-  }
-
-  /** Shared by the drop zone and the file picker so both behave identically. */
-  function applySiteFile(text: string, fileName: string) {
-    const cleaned = cleanSiteList(text);
-    const count = splitLines(cleaned).length;
-    if (!count) {
-      toast.error(`${fileName} had no usable store lines`);
-      return;
-    }
-    onSitesChange(cleaned);
-    toast.success(`Loaded ${count} store(s) from ${fileName}`);
-  }
-
-  async function handleDrop(event: React.DragEvent) {
-    event.preventDefault();
-    setDragging(false);
-    const file = event.dataTransfer.files?.[0];
-    if (!file) return;
-    applySiteFile(await file.text(), file.name);
-  }
 
   return (
     <div className="space-y-3">
-      <div className="space-y-1.5">
-        <Label htmlFor="site-list" hint={`${siteLines.length} store(s)`}>
-          Stores to test
-        </Label>
-        <Textarea
-          id="site-list"
-          value={sites}
-          onChange={(e) => onSitesChange(e.target.value)}
-          onDragOver={(e) => {
-            e.preventDefault();
-            setDragging(true);
-          }}
-          onDragLeave={() => setDragging(false)}
-          onDrop={handleDrop}
-          placeholder={"store-a.myshopify.com\nhttps://store-b.com\nbrand.com|extra|columns"}
-          className={`h-[280px] mono-input transition-colors ${dragging ? "border-primary bg-primary/5" : ""}`}
-          spellCheck={false}
-        />
-        <div className="flex flex-wrap items-center gap-2">
-          <Button type="button" variant="outline" size="sm" onClick={handleClean} disabled={!sites.trim()}>
-            <Wand2 />
-            Clean URLs
-          </Button>
-          <LoadFileButton
-            onLoad={applySiteFile}
-            label="Load stores from file"
-            title="Load a .txt file of stores from disk"
-          />
-          <Button type="button" variant="ghost" size="sm" onClick={() => onSitesChange("")} disabled={!sites.trim()}>
-            Clear
-          </Button>
-          <span className="text-[11px] text-muted-foreground">
+      <SiteListField
+        id="site-list"
+        label="Stores to test"
+        value={sites}
+        onChange={onSitesChange}
+        placeholder={"store-a.myshopify.com\nhttps://store-b.com\nbrand.com|extra|columns"}
+        hintText={
+          <>
             Drop a <span className="font-mono">.txt</span> file here, or paste one store per line.
-          </span>
-        </div>
-      </div>
+          </>
+        }
+      />
 
       <div className="space-y-1.5">
         <Label htmlFor="site-card" hint="optional — blank uses cards.txt">

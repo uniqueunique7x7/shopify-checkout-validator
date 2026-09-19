@@ -62,19 +62,25 @@ async def create_job(payload: JobCreateRequest) -> dict[str, Any]:
     mode = payload.mode
     random_target = bool(payload.random_target) and mode == "card"
     sites, rejected = normalize_sites(payload.sites)
+    # Where the per-card targets come from: a custom list wins, and only when the
+    # caller supplies none do the stores get pulled from the live pool.
+    pool_source = "live"
 
     # --- per-mode input requirements ------------------------------------
     if random_target:
-        # Every card is dealt its own store straight out of the live pool, so a
-        # single target store is neither required nor accepted.
+        # Every card is dealt its own store, so a single target store is neither
+        # required nor accepted — the supplied sites *are* the pool.
         if not payload.cards:
             raise ApiException("NO_CARDS", "Card jobs need at least one card.", 422)
-        sites = all_live_sites(jobs, history_store, include_running=True)
+        if sites:
+            pool_source = "custom"
+        else:
+            sites = all_live_sites(jobs, history_store, include_running=True)
         if not sites:
             raise ApiException(
                 "NO_LIVE_SITES",
-                "The live-site pool is empty, so there is nothing to target. Run a site "
-                "scan first, or turn off random targeting and pick a store manually.",
+                "No store pool to target. Paste a custom sites list, or run a site "
+                "scan first so the live pool is not empty.",
                 422,
             )
     elif mode == "site":
@@ -174,11 +180,13 @@ async def create_job(payload: JobCreateRequest) -> dict[str, Any]:
         endpoint=payload.endpoint,
         mode=mode,
         random_target=random_target,
+        pool_source=pool_source,
     )
     label = {"site": "site", "card": "card", "pair": "paired"}[mode]
     if random_target:
+        pool_label = "custom site(s)" if pool_source == "custom" else "live site(s)"
         await job.push_log(
-            f"{label} job · {len(payload.cards)} card(s) · {len(sites)} live site(s), "
+            f"{label} job · {len(payload.cards)} card(s) · {len(sites)} {pool_label}, "
             f"one random target per card"
         )
     else:

@@ -133,9 +133,11 @@ export interface JobParams {
   sites: string[];
   /** How many stores the job was given (the whole live pool in random-target mode). */
   sites_count?: number;
-  /** card mode: every card was dealt its own store from the live pool. */
+  /** card mode: every card was dealt its own store from a pool. */
   random_target?: boolean;
-  /** Size of the live pool the targets were drawn from, when random_target is set. */
+  /** Where the per-card pool came from — the live-site pool or the caller's list. */
+  pool_source?: "live" | "custom" | "";
+  /** Size of the pool the targets were drawn from, when random_target is set. */
   pool_size?: number;
   cards_count: number;
   cards_preview?: string[];
@@ -190,7 +192,7 @@ export interface JobCreateRequest {
   variant_id?: string | null;
   endpoint?: "check" | "shopify";
   mode?: JobMode;
-  /** card mode only: deal each card its own store from the live-site pool. */
+  /** card mode only: deal each card its own store (custom list, else live pool). */
   random_target?: boolean;
 }
 

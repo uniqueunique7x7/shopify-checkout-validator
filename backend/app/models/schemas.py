@@ -117,8 +117,9 @@ class JobCreateRequest(BaseModel):
     sites: list[str] = Field(
         default_factory=list,
         description=(
-            "Store URLs, one per entry. May be empty only for card mode with "
-            "random_target set, where the stores come from the live-site pool."
+            "Store URLs, one per entry. For card mode with random_target set the "
+            "list is the per-card pool: supply your own stores, or leave it empty "
+            "to draw them from the live-site pool instead."
         ),
     )
     cards: list[str] = Field(default_factory=list, description="cc|mm|yy|cvv entries (optional).")
@@ -138,8 +139,9 @@ class JobCreateRequest(BaseModel):
     random_target: bool = Field(
         False,
         description=(
-            "card mode only: ignore the supplied stores and deal each card its own "
-            "store from the live-site pool, so one run sweeps many gateways."
+            "card mode only: deal each card its own store, so one run sweeps many "
+            "gateways. The supplied sites form the pool, and when none are given "
+            "the stores come from the live-site pool instead."
         ),
     )
 

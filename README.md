@@ -198,7 +198,7 @@ All endpoints are documented in the OpenAPI schema. Errors are always:
 | POST   | `/api/validate`             | Full checkout validation for one store                  |
 | POST   | `/api/check`                | Gateway probe for one store                             |
 | GET    | `/api/products`             | Cheapest in-stock variants under the price cap          |
-| POST   | `/api/jobs`                 | Create a batch job (`mode`: `site` \| `card` \| `pair`, default `pair`; `random_target` for one pool store per card) |
+| POST   | `/api/jobs`                 | Create a batch job (`mode`: `site` \| `card` \| `pair`, default `pair`; `random_target` deals each card its own store from `sites` — or from the live pool when `sites` is empty) |
 | GET    | `/api/jobs/live-sites`      | **Pooled live stores** across all site jobs + history (`source`, `include_running`, `offset`, `limit`, `search`, `refresh`, `fmt=text`) |
 | GET    | `/api/jobs`                 | List jobs                                               |
 | GET    | `/api/jobs/{id}`            | Job status, results and logs                            |
@@ -273,7 +273,7 @@ Error bucket: `THROTTLED`, `TIMEOUT`, `GRAPHQL_ERROR`,
 | --------------- | ----------------------------------------------------------------------------- |
 | `/`             | Dashboard: KPIs, recent jobs, response distribution, single-store validation  |
 | `/site-validator` | **Site validator** — many stores, one task each. Finds stores with a live gateway |
-| `/card-validator` | **Card validator** — many cards against one store, or one random live store per card |
+| `/card-validator` | **Card validator** — many cards against one store, or one random store per card (live pool or your own list) |
 | `/bulk-checker` | Combined workspace with an explicit mode switch: stores-only, cards-on-one-store, or paired lists |
 | `/jobs`         | All jobs with live progress bars                                              |
 | `/stores`       | Product discovery, variant IDs, jump straight into validation                 |
@@ -290,7 +290,7 @@ Every job carries a `mode` that decides how the task list is built:
 | ------ | ---------------------------------------------------- | ----------------------------------- |
 | `site` | One task per store                                    | The single supplied card, or `cards.txt` (one entry per store, cycling) |
 | `card` | One task per card, all against `sites[0]`             | Each task carries its own card      |
-| `card` + `random_target` | One task per card, each on its own store from the live-site pool | Each task carries its own card |
+| `card` + `random_target` | One task per card, each on its own store — the pool is the supplied `sites`, or the live-site pool when none are sent | Each task carries its own card |
 | `pair` | Index-paired: `tasks[i] = (sites[i % n], cards[i % m])` | Index-paired lists                  |
 
 The Site validator always sends `mode: "site"`, the Card validator `mode: "card"`. The Bulk checker
@@ -298,16 +298,20 @@ lets you choose. `mode` defaults to `pair` for backwards compatibility with exis
 
 ### Random targeting (card mode)
 
-The card validator has a **“Random live site per card”** switch. With it on, `sites` is left empty
-and the job is created with `random_target: true`:
+The card validator has a **“Random live site per card”** switch. With it on, the job is created with
+`random_target: true` and every card is dealt its own store:
 
-* the backend reads the whole live-site pool (`sites` may therefore be empty; the per-mode store
-  requirement is deliberately skipped) and **shuffles it once**;
+* **`Live pool` (default)** — `sites` is left empty, so the backend reads the whole live-site pool
+  (the per-mode store requirement is deliberately skipped) and **shuffles it once**;
+* **`Custom list`** — the stores you paste or load (`SiteListField`, with *Clean URLs*, drag-and-drop
+  and *Load stores from file*) become the pool instead of the live site pool; they are normalised and
+  de-duplicated exactly like any other site list and mixed in the same way;
+* the raw pool is kept out of the job snapshot (`sites: []`, plus `pool_size` / `sites_count` / the
+  `pool_source` tag) so polling and SSE never ship thousands of URLs to the browser;
 * card *i* is then dealt `shuffled[i % pool_size]`, so every card gets a random store but no store
   repeats until the pool has been used up — one run sweeps many gateways instead of hammering one;
-* `422 NO_LIVE_SITES` comes back if the pool is empty, rather than silently running against nothing;
-* the raw pool is kept out of the job snapshot (`sites: []`, plus `pool_size` / `sites_count`) so
-  polling and SSE never ship thousands of URLs to the browser.
+* `422 NO_LIVE_SITES` comes back if there is no pool at all — neither a custom list nor a populated
+  live pool — rather than silently running against nothing.
 
 `random_target` is ignored for any mode other than `card`.
 
@@ -317,8 +321,8 @@ A card check only ends when the card earns a **real verdict** — success or dec
 out (`CAPTCHA_REQUIRED`, `THROTTLED`, `TIMEOUT`, `NO_PRODUCT`, …) the same card is **rechecked on the
 next store** and keeps moving until it lands a verdict or runs out of stores:
 
-* the primary target is the one you picked (or the card's slot in the shuffled pool for random
-  targeting); the rest of the live pool becomes its fallback chain;
+* the primary target is the one you picked (or the card's slot in the shuffled pool — live or custom
+  — for random targeting); the rest of that pool becomes its fallback chain;
 * the chain is capped by `CARD_MAX_TARGETS` (default 12) so one impossible card cannot sweep the
   whole pool;
 * `retries` still applies *per store* — the chain only advances once a store's attempts are spent;
@@ -342,7 +346,8 @@ job and never count toward the pool quarantine.
 
 The card validator does not ask you to type a store. It reads the **live site pool** from
 `GET /api/jobs/live-sites` and you pick a target from the list — or let random targeting deal one
-out per card. The pool merges two sources so it survives restarts:
+out per card, either from that pool or from a custom list you paste in. The pool merges two sources
+so it survives restarts:
 
 1. the results of every job this process still holds (`mode: site`, bucket `live`), and
 2. the persisted history file — which covers earlier sessions.

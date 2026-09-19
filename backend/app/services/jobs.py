@@ -306,6 +306,7 @@ class JobManager:
         endpoint: str = "check",
         mode: str = "pair",
         random_target: bool = False,
+        pool_source: str = "live",
     ) -> Job:
         cards = cards or []
         max_targets = app_settings.card_max_targets if mode == "card" else 1
@@ -322,6 +323,7 @@ class JobManager:
             "sites": [] if random_target else (sites[:1] if mode == "card" else sites),
             "sites_count": len(sites),
             "random_target": bool(random_target),
+            "pool_source": pool_source if random_target else "",
             "pool_size": pool_size,
             "card_max_targets": max_targets if mode == "card" else 0,
             "cards_count": len(cards),

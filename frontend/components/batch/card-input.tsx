@@ -32,6 +32,7 @@ export function CardInput({
   onLoadFromFile,
   randomTarget = false,
   poolCount = 0,
+  poolIsCustom = false,
 }: {
   site: string;
   onSiteChange: (value: string) => void;
@@ -39,10 +40,12 @@ export function CardInput({
   onCardsChange: (value: string) => void;
   availableCards: number;
   onLoadFromFile: () => void;
-  /** Deal every card its own store from the live pool instead of one fixed store. */
+  /** Deal every card its own store instead of one fixed store. */
   randomTarget?: boolean;
-  /** Size of the live pool, shown when random targeting is on. */
+  /** Size of the per-card pool, shown when random targeting is on. */
   poolCount?: number;
+  /** The pool is the operator's own list rather than the live-site pool. */
+  poolIsCustom?: boolean;
 }) {
   const [dragging, setDragging] = useState(false);
   const lines = splitLines(cards);
@@ -84,13 +87,25 @@ export function CardInput({
     <div className="space-y-3">
       {randomTarget ? (
         <div className="space-y-1.5">
-          <Label hint="no single store — the pool decides">Target store</Label>
+          <Label hint={poolIsCustom ? "your own list decides" : "no single store — the pool decides"}>
+            Target store
+          </Label>
           <div className="flex items-center gap-2 rounded-md border border-dashed border-border bg-muted/30 px-3 py-2">
             <Shuffle className="h-3.5 w-3.5 shrink-0 text-primary" />
             <p className="text-xs">
-              Each card gets its own store, dealt at random from all{" "}
-              <span className="font-mono text-foreground">{poolCount}</span> live site(s). Nothing repeats
-              until the pool is used up.
+              {poolIsCustom ? (
+                <>
+                  Each card gets its own store from your custom list of{" "}
+                  <span className="font-mono text-foreground">{poolCount}</span> site(s). Nothing repeats
+                  until the list is used up.
+                </>
+              ) : (
+                <>
+                  Each card gets its own store, dealt at random from all{" "}
+                  <span className="font-mono text-foreground">{poolCount}</span> live site(s). Nothing
+                  repeats until the pool is used up.
+                </>
+              )}
             </p>
           </div>
         </div>
@@ -179,7 +194,7 @@ export function CardInput({
       <StatStrip>
         <StatTile label="Cards" value={valid} tone="primary" />
         <StatTile label="Tasks" value={valid} />
-        <StatTile label="Targets" value={1} />
+        <StatTile label={randomTarget ? "Pool" : "Targets"} value={randomTarget ? poolCount : 1} />
         <StatTile label="Flow" value={<span className="text-[13px]">probe</span>} />
       </StatStrip>
     </div>
