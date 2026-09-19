@@ -36,10 +36,18 @@ export function JobRunner({
       <Card>
         {stream.error ? (
           <>
-            <ErrorState title="Job unavailable" message={stream.error} onRetry={() => void stream.refresh()} />
+            <ErrorState
+              title={stream.missing ? "Job not found" : "Connection lost"}
+              message={
+                stream.missing
+                  ? `${stream.error} Start a new job, or pick one from the jobs page.`
+                  : `${stream.error} The job keeps running on the server, so it will pick up again on its own.`
+              }
+              onRetry={() => void stream.refresh()}
+            />
             <div className="flex justify-center pb-4">
               <Button variant="outline" size="sm" onClick={onForget}>
-                Clear selection and start a new job
+                {stream.missing ? "Clear selection and start a new job" : "Stop watching this job"}
               </Button>
             </div>
           </>

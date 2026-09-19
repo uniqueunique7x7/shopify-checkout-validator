@@ -97,7 +97,7 @@ export function BulkChecker({ initialJobId = null }: { initialJobId?: string | n
         jobId={jobId}
         stream={stream}
         onForget={() => {
-          forget();
+          forget(STORAGE_KEY);
           setJobId(null);
         }}
         emptyHint={{

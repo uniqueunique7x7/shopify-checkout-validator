@@ -44,7 +44,10 @@ export function useJobLauncher(onCreated: (jobId: string) => void) {
     [onCreated],
   );
 
-  const forget = useCallback(() => {
+  const forget = useCallback((storageKey?: string) => {
+    // drop the resume pointer too, otherwise the stream hook immediately adopts
+    // the job again the moment the id is cleared
+    if (storageKey) window.localStorage.removeItem(storageKey);
     window.history.replaceState(null, "", window.location.pathname);
   }, []);
 

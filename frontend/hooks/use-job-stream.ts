@@ -7,6 +7,9 @@ import type { JobCounters, JobDetail, JobEvent, JobLogEntry, JobStatus, ResultRe
 
 const TERMINAL: JobStatus[] = ["completed", "failed", "cancelled"];
 const MAX_LOGS = 400;
+/** Reconnect backoff — 1s, 2s, 4s, 8s, then every 10s until the server answers. */
+const RETRY_BASE_MS = 1000;
+const RETRY_MAX_MS = 10_000;
 
 interface JobStreamState {
   job: JobDetail | null;
@@ -22,7 +25,11 @@ interface JobStreamState {
 /**
  * Subscribes to a job over SSE and keeps local state in sync.
  * Falls back to polling if EventSource is unavailable or the stream errors.
- * A 404 stops all activity and reports `missing` so the UI can offer a reset.
+ *
+ * Network trouble never throws the job away: the last snapshot stays on screen,
+ * `connected` flips to false and the hook reconnects with a growing backoff until
+ * the backend answers again. Only a 404 — the job is gone, e.g. after a backend
+ * restart — is terminal, and it reports `missing` so the UI can reset.
  *
  * Pass `resumeLast` (a localStorage key) to restore the most recent job id for
  * this validator when the page loads without a `?job=` parameter.
@@ -41,9 +48,33 @@ export function useJobStream(
     error: null,
     missing: false,
   });
+  // bumped to tear the current stream down and connect again (manual retry / backoff)
+  const [nonce, setNonce] = useState(0);
+  const attemptRef = useRef(0);
+  const retryRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const onResumeRef = useRef(onResume);
   onResumeRef.current = onResume;
+  /** Last id written to `resumeLast` — avoids a write on every poll tick. */
+  const persistedRef = useRef<string | null>(null);
+
+  const clearRetry = useCallback(() => {
+    if (retryRef.current) {
+      clearTimeout(retryRef.current);
+      retryRef.current = null;
+    }
+  }, []);
+
+  /** Reconnect after a delay, doubling up to RETRY_MAX_MS. Never queues twice. */
+  const scheduleReconnect = useCallback(() => {
+    if (retryRef.current) return;
+    const delay = Math.min(RETRY_MAX_MS, RETRY_BASE_MS * 2 ** Math.min(attemptRef.current, 4));
+    attemptRef.current += 1;
+    retryRef.current = setTimeout(() => {
+      retryRef.current = null;
+      setNonce((value) => value + 1);
+    }, delay);
+  }, []);
 
   // restore the previous job id once, before subscribing
   useEffect(() => {
@@ -52,26 +83,32 @@ export function useJobStream(
     if (stored) onResumeRef.current?.(stored);
   }, [jobId, resumeLast]);
 
-  useEffect(() => {
-    if (jobId && resumeLast) window.localStorage.setItem(resumeLast, jobId);
-  }, [jobId, resumeLast]);
-
   const sourceRef = useRef<EventSource | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const resultsRef = useRef<Map<number, ResultRecord>>(new Map());
 
-  const applySnapshot = useCallback((job: JobDetail) => {
-    resultsRef.current = new Map(job.results.map((r) => [r.index, r]));
-    setState({
-      job,
-      results: [...resultsRef.current.values()].sort((a, b) => a.index - b.index),
-      logs: job.logs.slice(-MAX_LOGS),
-      status: job.status,
-      connected: true,
-      error: job.error,
-      missing: false,
-    });
-  }, []);
+  const applySnapshot = useCallback(
+    (job: JobDetail) => {
+      attemptRef.current = 0;
+      clearRetry();
+      // only jobs the backend actually knows are worth resuming next time
+      if (resumeLast && persistedRef.current !== job.id) {
+        persistedRef.current = job.id;
+        window.localStorage.setItem(resumeLast, job.id);
+      }
+      resultsRef.current = new Map(job.results.map((r) => [r.index, r]));
+      setState({
+        job,
+        results: [...resultsRef.current.values()].sort((a, b) => a.index - b.index),
+        logs: job.logs.slice(-MAX_LOGS),
+        status: job.status,
+        connected: true,
+        error: job.error,
+        missing: false,
+      });
+    },
+    [clearRetry, resumeLast],
+  );
 
   const stopPolling = useCallback(() => {
     if (pollRef.current) {
@@ -86,13 +123,20 @@ export function useJobStream(
     stopPolling();
   }, [stopPolling]);
 
+  /** Terminal: the backend has no record of this job, so stop retrying. */
   const fail = useCallback(
     (message: string, missing = false) => {
       stopStream();
+      clearRetry();
       setState((prev) => ({ ...prev, connected: false, error: message, missing }));
     },
-    [stopStream],
+    [clearRetry, stopStream],
   );
+
+  /** A blip, not a dead job: keep the last snapshot on screen and try again. */
+  const transient = useCallback((message: string) => {
+    setState((prev) => (prev.missing ? prev : { ...prev, connected: false, error: message }));
+  }, []);
 
   const startPolling = useCallback(
     (id: string) => {
@@ -104,27 +148,47 @@ export function useJobStream(
           if (TERMINAL.includes(job.status)) stopPolling();
         } catch (error) {
           const status = (error as { status?: number }).status;
-          if (status === 404) fail("This job no longer exists on the server.", true);
+          if (status === 404) {
+            fail("This job no longer exists on the server.", true);
+            return;
+          }
+          // backend unreachable — hold on to the numbers we already have
+          transient(error instanceof Error ? error.message : "Connection lost");
+          scheduleReconnect();
         }
       }, 1500);
     },
-    [applySnapshot, fail, stopPolling],
+    [applySnapshot, fail, scheduleReconnect, stopPolling, transient],
   );
 
+  /** Manual retry: drop the backoff and reconnect right now. */
   const refresh = useCallback(async () => {
     if (!jobId) return;
+    attemptRef.current = 0;
+    clearRetry();
+    setState((prev) => (prev.missing ? prev : { ...prev, error: null }));
     try {
       const job = await api.job(jobId);
       applySnapshot(job);
-      if (TERMINAL.includes(job.status)) stopPolling();
-      else startPolling(jobId);
-    } catch {
-      /* keep the current state */
+      // re-open the stream so live events resume with a fresh snapshot
+      setNonce((value) => value + 1);
+    } catch (error) {
+      const status = (error as { status?: number }).status;
+      if (status === 404) {
+        fail("This job no longer exists on the server (it may have restarted).", true);
+      } else {
+        transient(error instanceof Error ? error.message : "Connection lost");
+        scheduleReconnect();
+      }
     }
-  }, [jobId, applySnapshot, startPolling, stopPolling]);
+  }, [jobId, applySnapshot, clearRetry, fail, scheduleReconnect, transient]);
 
+  // A new job id starts from a clean slate. A *reconnect* (the nonce bump) must
+  // not wipe what is on screen, so the reset lives in its own effect.
   useEffect(() => {
     resultsRef.current = new Map();
+    attemptRef.current = 0;
+    clearRetry();
     setState({
       job: null,
       results: [],
@@ -134,10 +198,12 @@ export function useJobStream(
       error: null,
       missing: false,
     });
+  }, [jobId, clearRetry]);
 
+  useEffect(() => {
     if (!jobId) return;
 
-    // initial fetch so the UI renders immediately
+    // initial fetch so the UI renders immediately, and so a dead job is spotted
     api
       .job(jobId)
       .then((job) => {
@@ -150,7 +216,9 @@ export function useJobStream(
         if (status === 404) {
           fail("This job no longer exists on the server (it may have restarted).", true);
         } else {
-          fail(error.message);
+          // the job is still running on the server — keep the last snapshot
+          transient(error.message);
+          scheduleReconnect();
         }
       });
 
@@ -178,6 +246,7 @@ export function useJobStream(
                 logs: payload.job.logs.slice(-MAX_LOGS),
                 status: payload.job.status,
                 connected: true,
+                error: payload.job.error,
               };
             }
             case "task_done": {
@@ -244,7 +313,8 @@ export function useJobStream(
           if (prev.missing) return prev;
           return { ...prev, connected: false };
         });
-        // the initial fetch decides whether the job exists at all
+        // The stream can also end because the job finished; polling decides
+        // whether this was a network blip or a normal close.
         if (jobId) startPolling(jobId);
       };
     }
@@ -254,7 +324,7 @@ export function useJobStream(
       sourceRef.current = null;
       stopPolling();
     };
-  }, [jobId, applySnapshot, startPolling, stopPolling, fail]);
+  }, [jobId, nonce, applySnapshot, startPolling, stopPolling, fail, transient, scheduleReconnect]);
 
   return { ...state, refresh };
 }

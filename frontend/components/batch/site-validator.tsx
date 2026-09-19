@@ -136,7 +136,7 @@ export function SiteValidator({ initialJobId = null }: { initialJobId?: string |
         jobId={jobId}
         stream={stream}
         onForget={() => {
-          forget();
+          forget(STORAGE_KEY);
           setJobId(null);
         }}
         emptyHint={{
